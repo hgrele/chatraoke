@@ -184,6 +184,53 @@
   .imprimante.travaille { animation: vibre .12s infinite; }
   @keyframes vibre { 50% { transform: translateY(1px); } }
 
+  /* ---------- modes et jeu */
+  body[data-mode="karaoke"] .jeu-seulement, body[data-mode="jeu"] .karaoke-seulement { display: none !important; }
+  .onglets { display: inline-flex; gap: 2px; padding: 4px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); }
+  .onglet { border: 0; background: none; padding: 8px 14px; border-radius: 999px; font-size: 14px; font-weight: 600; color: var(--muted); cursor: pointer; }
+  .onglet.actif { color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+  .jeu-barre {
+    display: flex; align-items: center; gap: 22px; flex-wrap: wrap; margin-bottom: 18px; padding: 14px 20px;
+    border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line);
+  }
+  .stat small { display: block; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .stat b { font-size: 28px; font-variant-numeric: tabular-nums; }
+  .jeu-barre .actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+  .bouton { border: 0; cursor: pointer; padding: 10px 18px; border-radius: 999px; font-weight: 700; background: color-mix(in srgb, var(--ink) 8%, transparent); }
+  .bouton:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+  .bouton.principal { color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 10px 24px -12px var(--accent); }
+  .lecture.en-question .karaoke { display: none; }
+  .lecture.vide .question { display: none; }
+  .question { margin-top: 24px; text-align: center; }
+  .question:empty { display: none; }
+  .ligne-trous {
+    display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-end; gap: 8px 14px;
+    font-size: clamp(22px, 3.2vw, 34px); font-weight: 800; line-height: 1.5;
+  }
+  .trou { display: inline-flex; align-items: flex-end; gap: 3px; }
+  .trou i { display: inline-block; width: .6em; height: 1.1em; border-bottom: 4px solid var(--accent); }
+  .mot { padding: 0 8px; border-radius: 10px; }
+  .mot.juste { color: var(--ok); background: color-mix(in srgb, var(--ok) 16%, transparent); }
+  .mot.faux { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  .form-reponse { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 24px; }
+  .form-reponse input {
+    flex: 1; min-width: 220px; max-width: 460px; padding: 14px 20px; border-radius: 999px; font: inherit; font-size: 18px;
+    border: 2px solid var(--line); background: var(--bg); color: var(--ink);
+  }
+  .form-reponse input:focus { outline: none; border-color: var(--accent); }
+  .choix { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 24px; }
+  .choix button {
+    padding: 16px; border-radius: 16px; font-size: 17px; font-weight: 700; cursor: pointer;
+    border: 2px solid var(--line); background: var(--surface); transition: border-color .2s, transform .2s;
+  }
+  .choix button:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .indice { margin-top: 12px; font-size: 14px; color: var(--muted); }
+  .verdict { margin-top: 20px; font-size: clamp(28px, 4vw, 40px); font-weight: 900; animation: monte .45s ease; }
+  .points { font-size: 20px; font-weight: 800; color: var(--accent); }
+  .donne { margin-top: 6px; color: var(--muted); }
+  .question .actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 22px; }
+  .fin-partie b { display: block; font-size: 64px; font-weight: 900; color: var(--accent); }
+
   .logo-mini { width: 40px; height: 40px; filter: drop-shadow(0 6px 12px rgba(255, 79, 135, .35)); }
   .rideau-ticket { display: block; width: 100%; margin-bottom: 18px; image-rendering: pixelated; animation: imprime 16s linear; }
 
@@ -325,6 +372,10 @@
 <header>
   <div class="logo"><svg class="logo-mini" aria-hidden="true"><use href="#logo-chat"/></svg> ChatRaoké</div>
   <div class="reglages">
+    <div class="onglets">
+      <button class="onglet" data-mode="karaoke">🎤 Karaoké</button>
+      <button class="onglet" data-mode="jeu">🐱 Le chat a mangé les paroles</button>
+    </div>
     <label class="interrupteur"><input type="checkbox" id="imprimer" checked><span></span>Imprimer les paroles</label>
     <span class="pastille" id="pastille"><i></i><b>Imprimante…</b></span>
   </div>
@@ -332,9 +383,19 @@
 
 <main>
   <section>
+    <div class="jeu-barre jeu-seulement">
+      <div class="stat"><small>Score</small><b id="score">0</b></div>
+      <div class="stat"><small>Manche</small><b id="num-manche">0</b></div>
+      <div class="actions">
+        <button class="bouton principal" id="manche-hasard">🎲 Nouvelle manche</button>
+        <button class="bouton" id="terminer">Terminer la partie</button>
+        <button class="bouton" id="remise-a-zero">Remettre à zéro</button>
+      </div>
+    </div>
     <div class="lecture vide" id="lecture">
       <div class="flou" id="flou"></div>
-      <div class="accueil"><b>Choisis une chanson ✨</b><span>La musique démarre dans Spotify et les paroles s'impriment en rythme.</span></div>
+      <div class="accueil karaoke-seulement"><b>Choisis une chanson ✨</b><span>La musique démarre dans Spotify et les paroles s'impriment en rythme.</span></div>
+      <div class="accueil jeu-seulement"><b>Le chat a mangé les paroles 🐱</b><span>La musique se coupe : à toi de retrouver la suite ! Clique sur une chanson ou lance une manche au hasard.</span></div>
       <div class="haut">
         <div class="vignette" id="vignette"></div>
         <div class="infos">
@@ -352,6 +413,7 @@
         <p class="cour" id="k-cour"></p>
         <p class="suiv" id="k-suiv"></p>
       </div>
+      <div class="question" id="question"></div>
     </div>
 
     <h3>Chansons</h3>
@@ -433,7 +495,7 @@ async function charger() {
     const d = carte.querySelector(".d");
     d.textContent = `${fmt(c.duree)} · ${c.lignes.length} lignes`;
     if (!c.uri) { const em = document.createElement("em"); em.textContent = "sans lien Spotify"; d.append(em); }
-    carte.addEventListener("click", () => lancer(c.id));
+    carte.addEventListener("click", () => (mode === "jeu" ? lancerManche(c.id) : lancer(c.id)));
     grille.append(carte);
   }
   if (!chansons.length) grille.innerHTML = `<p class="astuce">Aucune chanson trouvée.</p>`;
@@ -461,6 +523,7 @@ async function sonder(unique) {
   recu = performance.now();
   majPastille();
   majTicket();
+  majJeu();
   if (!unique) setTimeout(sonder, 400);
 }
 
@@ -505,8 +568,10 @@ function majTicket() {
   }
   const c = chanson();
   if (!c) return;
-  if (ticket.chanson !== c.id || (etat.index === -1 && ticket.index > -1)) {
-    ticket = { chanson: c.id, index: -1, fin: false };
+  const j = etat.jeu;
+  const cle = j ? `${c.id}#${j.manche}` : c.id;
+  if (ticket.chanson !== cle || (!j && etat.index === -1 && ticket.index > -1)) {
+    ticket = { chanson: cle, index: j ? j.debut - 1 : -1, fin: false, question: false, resultat: false, finPartie: false };
     const t = $("ticket");
     t.textContent = "";
     if (!etat.imprimer) {
@@ -514,14 +579,145 @@ function majTicket() {
       return;
     }
     ajouterLigne(c.titre, "titre");
-    if (c.artiste) ajouterLigne(c.artiste, "artiste");
+    if (c.artiste) ajouterLigne(c.artiste, j ? "" : "artiste");
+    if (j) ajouterLigne(`Manche ${j.manche} · le chat a mangé les paroles`, "artiste");
   }
   if (!etat.imprimer) return;
   while (ticket.index < etat.index) {
     ticket.index++;
     ajouterLigne(c.lignes[ticket.index][1]);
   }
-  if (etat.statut === "fin" && !ticket.fin) { ticket.fin = true; ajouterLigne("♥", "fin"); }
+  if (j) {
+    if (["question", "resultat", "fin"].includes(j.phase) && !ticket.question) {
+      ticket.question = true;
+      ajouterLigne(`${j.visible} ${j.trous}`);
+    }
+    if (j.resultat && !ticket.resultat) {
+      ticket.resultat = true;
+      ajouterLigne(`> ${j.resultat.attendu}`);
+      ajouterLigne(verdict(j.resultat), "titre");
+      ajouterLigne(`Score : ${etat.partie.score}`, "artiste");
+    }
+    if (j.phase === "fin" && !ticket.finPartie) {
+      ticket.finPartie = true;
+      ajouterLigne("Fin de partie", "titre");
+      ajouterLigne(`Score final : ${etat.partie.score}`);
+      ajouterLigne("♥", "fin");
+    }
+  } else if (etat.statut === "fin" && !ticket.fin) {
+    ticket.fin = true;
+    ajouterLigne("♥", "fin");
+  }
+}
+
+// ---------- jeu : le chat a mangé les paroles
+const el = (tag, classe, texte) => {
+  const e = document.createElement(tag);
+  if (classe) e.className = classe;
+  if (texte != null) e.textContent = texte;
+  return e;
+};
+const verdict = (r) => (r.parfait ? `Bravo ! +${r.points}` : r.points ? `Presque ! +${r.points}` : "Raté… le chat garde les paroles");
+
+let mode = "karaoke";
+try { mode = localStorage.getItem("mode") || "karaoke"; } catch {}
+if (["karaoke", "jeu"].includes(new URLSearchParams(location.search).get("mode"))) {
+  mode = new URLSearchParams(location.search).get("mode");  // ex. /?debug&mode=jeu
+}
+function changerMode(m) {
+  mode = m;
+  document.body.dataset.mode = m;
+  document.querySelectorAll(".onglet").forEach((b) => b.classList.toggle("actif", b.dataset.mode === m));
+  try { localStorage.setItem("mode", m); } catch {}
+}
+document.querySelectorAll(".onglet").forEach((b) => b.addEventListener("click", () => changerMode(b.dataset.mode)));
+changerMode(mode);
+
+async function action(chemin, corps) {
+  try { await appeler(chemin, corps); sonder(true); } catch (e) { toast(e.message); }
+}
+const lancerManche = (id) => action("/api/jeu/manche", { id, imprimer: $("imprimer").checked });
+$("manche-hasard").addEventListener("click", () => lancerManche(null));
+$("terminer").addEventListener("click", () => action("/api/jeu/terminer", { imprimer: $("imprimer").checked }));
+$("remise-a-zero").addEventListener("click", () => action("/api/jeu/nouvelle"));
+
+let jeuCle = null;
+function majJeu() {
+  const p = etat.partie || { score: 0, manche: 0 };
+  $("score").textContent = p.score;
+  $("num-manche").textContent = p.manche;
+  const j = etat.jeu;
+  const phase = j?.phase;
+  const enQuestion = ["question", "resultat", "fin"].includes(phase);
+  $("lecture").classList.toggle("en-question", enQuestion);
+  const cle = j ? `${j.manche}:${phase}:${j.choix ? "joker" : ""}` : null;
+  if (cle === jeuCle) return;  // on ne redessine pas à chaque sondage (sinon on effacerait la saisie)
+  jeuCle = cle;
+  const q = $("question");
+  q.textContent = "";
+  if (!enQuestion) return;
+
+  if (phase === "fin") {
+    const f = el("div", "fin-partie");
+    f.append(el("div", "verdict", "Partie terminée 🎉"), el("b", "", p.score), el("div", "donne", `points en ${p.manche} manche${p.manche > 1 ? "s" : ""}`));
+    const a = el("div", "actions");
+    const b = el("button", "bouton principal", "Nouvelle partie");
+    b.addEventListener("click", () => action("/api/jeu/nouvelle"));
+    a.append(b);
+    q.append(f, a);
+    return;
+  }
+
+  // la ligne : mots visibles + trous (ou correction)
+  const ligne = el("div", "ligne-trous");
+  ligne.append(el("span", "", j.visible));
+  if (phase === "question") {
+    for (const mot of j.trous.split(" ")) {
+      const trou = el("span", "trou");
+      for (const ch of mot) trou.append(ch === "_" ? el("i") : el("span", "", ch));
+      ligne.append(trou);
+    }
+  } else {
+    for (const d of j.resultat.detail) ligne.append(el("span", `mot ${d.juste ? "juste" : "faux"}`, d.mot));
+  }
+  q.append(ligne);
+
+  if (phase === "question") {
+    if (j.choix) {
+      const grille = el("div", "choix");
+      for (const c of j.choix) {
+        const b = el("button", "", c);
+        b.addEventListener("click", () => action("/api/jeu/repondre", { texte: c }));
+        grille.append(b);
+      }
+      q.append(grille, el("div", "indice", `Joker utilisé : une bonne réponse rapporte 50 points.`));
+    } else {
+      const form = el("form", "form-reponse");
+      const champ = el("input");
+      champ.placeholder = "Tape la suite des paroles…";
+      champ.autocomplete = "off";
+      const valider = el("button", "bouton principal", "Valider");
+      const joker = el("button", "bouton", "🃏 Joker");
+      joker.type = "button";
+      joker.addEventListener("click", () => action("/api/jeu/joker"));
+      form.addEventListener("submit", (e) => { e.preventDefault(); action("/api/jeu/repondre", { texte: champ.value }); });
+      form.append(champ, valider, joker);
+      q.append(form, el("div", "indice", "100 points sans faute · 10 points par mot juste · le joker propose 4 réponses (50 points)"));
+      setTimeout(() => champ.focus(), 50);
+    }
+  } else {
+    const r = j.resultat;
+    q.append(el("div", "verdict", r.parfait ? "Bravo ! 🎉" : r.points ? "Presque ! 😼" : "Raté… 😿"));
+    q.append(el("div", "points", `+${r.points} points`));
+    if (!r.parfait) q.append(el("div", "donne", `Ta réponse : « ${r.donne || "…"} »`));
+    const a = el("div", "actions");
+    const suite = el("button", "bouton principal", "🎲 Manche suivante");
+    suite.addEventListener("click", () => lancerManche(null));
+    const fin = el("button", "bouton", "Terminer la partie");
+    fin.addEventListener("click", () => action("/api/jeu/terminer", { imprimer: $("imprimer").checked }));
+    a.append(suite, fin);
+    q.append(a);
+  }
 }
 
 // ---------- affichage en direct (60 i/s, position interpolée entre deux sondages)
@@ -549,12 +745,18 @@ function image() {
 
     let i = -1;
     for (let k = 0; k < c.lignes.length && c.lignes[k][0] <= pos; k++) i = k;
-    const cle = `${c.id}:${i}`;
+    const j = etat.jeu;
+    const cle = `${c.id}:${i}:${j?.manche}:${j?.phase}`;
     if (cle !== ligneAffichee) {
       ligneAffichee = cle;
-      $("k-prec").textContent = c.lignes[i - 1]?.[1] || "";
-      $("k-cour").textContent = i >= 0 ? c.lignes[i][1] : "♪ ♪ ♪";
-      $("k-suiv").textContent = c.lignes[i + 1]?.[1] || "";
+      // en jeu, on cache la ligne mystère et tout ce qui suit
+      const texte = (k) => {
+        if (j && j.phase === "ecoute" && k >= j.cible) return k === j.cible ? `${j.visible} ${j.trous}` : "";
+        return c.lignes[k]?.[1] || "";
+      };
+      $("k-prec").textContent = texte(i - 1);
+      $("k-cour").textContent = i >= 0 ? texte(i) : "♪ ♪ ♪";
+      $("k-suiv").textContent = texte(i + 1);
       const cour = $("k-cour");
       cour.classList.remove("nouvelle");
       void cour.offsetWidth;

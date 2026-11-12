@@ -11,6 +11,7 @@ Pour qu'un clic lance la musique, le .lrc doit contenir une ligne [spotify: lien
 import asyncio
 import json
 import os
+import random
 import re
 import subprocess
 import sys
@@ -25,6 +26,7 @@ from PIL import ImageFont
 from coeur import CAT_ECRITURE, CAT_NOTIF, LARGEUR_DEFAUT, cat_paquets, coeur, coller
 from paroles import CIBLE_DEFAUT, POLICE_DEFAUT, HorlogeSpotify, lire_lrc, osascript, texte_en_page
 from rideau import dessiner_rideau, rideau_en_page
+import jeu
 
 ICI = Path(__file__).resolve().parent
 PORT = 8765
@@ -38,6 +40,7 @@ INTRO_IMPRESSION = 16  # s : durée sur laquelle le rideau est imprimé, pour su
 
 ARTISTE = re.compile(r"\[ar:\s*(.*?)\s*\]", re.I)
 DUREE = re.compile(r"\[length:\s*(\d+):(\d+)", re.I)
+BALISE_JEU = re.compile(r"\[jeu:\s*(.*?)\s*\]", re.I)  # ligne à faire trouver, ex. [jeu: Il pleut | de l'eau d'javel]
 PISTE = re.compile(r"track[/:]([A-Za-z0-9]{22})")
 
 # ---------------------------------------------------------------- bibliothèque
@@ -79,11 +82,41 @@ def lister_chansons() -> list[dict]:
             "pochette": pochette(lien) if piste else None,
             "duree": int(du.group(1)) * 60 + int(du.group(2)) if du else lignes[-1][0] + 10,
             "lignes": lignes,
+            "jeu": BALISE_JEU.findall(entete),
         })
     return chansons
 
 
 # ---------------------------------------------------------------- lecture + impression
+
+class Bande:
+    """Bande de papier continue. Le papier n'avance qu'en imprimant : pour faire sortir une ligne,
+    on imprime jusqu'à SORTIE rangées sous elle, ce qui la pousse hors de l'imprimante tandis que
+    la suite est déjà « pré-imprimée » dedans (pas de grands blancs entre les lignes)."""
+
+    def __init__(self, lecteur: "Lecteur"):
+        self.lecteur, self.rangees, self.imprime = lecteur, [], 0
+
+    def ajouter(self, page, ecart=0) -> int:
+        """Ajoute une page (et un blanc dessous) ; renvoie la rangée de fin de la page."""
+        self.rangees.extend(page)
+        fin = len(self.rangees)
+        self.rangees.extend([[False] * LARGEUR] * ecart)
+        return fin
+
+    async def jusqua(self, n: int):
+        n = min(n, len(self.rangees))
+        if n > self.imprime:
+            await self.lecteur.ecrire(self.rangees[self.imprime:n], 0)
+            self.imprime = n
+
+    async def sortir(self, fin: int):
+        """Fait sortir de l'imprimante tout ce qui est au-dessus de la rangée `fin`."""
+        manque = fin + SORTIE - len(self.rangees)
+        if manque > 0:
+            self.rangees.extend([[False] * LARGEUR] * manque)
+        await self.jusqua(fin + SORTIE)
+
 
 class Lecteur:
     def __init__(self):
@@ -93,7 +126,11 @@ class Lecteur:
         self.verrou = asyncio.Lock()
         self.tache: asyncio.Task | None = None
         self.etat = {"statut": "inactif", "message": "", "chanson": None, "position": 0.0,
-                     "index": -1, "imprimer": True, "imprimante": False, "imprimante_info": ""}
+                     "index": -1, "imprimer": True, "imprimante": False, "imprimante_info": "",
+                     "jeu": None, "partie": {"score": 0, "manche": 0}}
+        self.partie = {"score": 0, "manche": 0}
+        self.manche: dict | None = None
+        self.impression: asyncio.Task | None = None
         self.police = ImageFont.truetype(POLICE_DEFAUT, 30)
         self.police_titre = ImageFont.truetype(POLICE_DEFAUT, 44)
         self.police_artiste = ImageFont.truetype(POLICE_DEFAUT.replace(" Bold", ""), 24)
@@ -157,66 +194,73 @@ class Lecteur:
         else:
             self.maj(statut="inactif")
 
+    # ------------------------------------------------ briques communes
+
+    def entete(self, bande: "Bande", chanson: dict, sous_titre: str | None = None) -> int:
+        bande.ajouter(texte_en_page(chanson["titre"], self.police_titre, LARGEUR))
+        if chanson["artiste"]:
+            bande.ajouter(texte_en_page(chanson["artiste"], self.police_artiste, LARGEUR))
+        if sous_titre:
+            bande.ajouter(texte_en_page(sous_titre, self.police_artiste, LARGEUR))
+        bande.ajouter([], 36)
+        return len(bande.rangees)
+
+    async def demarrer_spotify(self, chanson: dict, position: float = 0.0) -> HorlogeSpotify:
+        horloge = HorlogeSpotify(chanson["titre"])
+        if chanson["uri"]:
+            await asyncio.to_thread(osascript, f'tell application "Spotify" to play track "{chanson["uri"]}"')
+            if position:
+                await asyncio.sleep(0.6)
+                await asyncio.to_thread(osascript, f'tell application "Spotify" to set player position to {position:.2f}')
+            self.maj(statut="attente", message="Démarrage de Spotify…")
+        else:
+            self.maj(statut="attente", message="Pas de lien Spotify : lance la chanson dans Spotify.")
+        return horloge
+
+    async def attendre(self, horloge: HorlogeSpotify, t: float) -> float:
+        """Attend que la chanson atteigne t secondes (en suivant pauses et sauts)."""
+        while True:
+            pos = horloge()
+            if pos is not None:
+                self.maj(position=pos, statut="lecture", message="")
+                if pos >= t:
+                    return pos
+            elif self.etat["statut"] == "lecture":
+                self.maj(statut="pause")
+            await asyncio.sleep(0.05)
+
+    async def ecrire_lignes(self, textes_polices: list[tuple[str, ImageFont.FreeTypeFont]], avance=SORTIE):
+        page = []
+        for texte, police in textes_polices:
+            page += texte_en_page(texte, police, LARGEUR)
+        await self.ecrire(page, avance)
+
+    # ------------------------------------------------ karaoké
+
     async def jouer(self, chanson: dict, imprimer: bool):
         horloge = None
         try:
             self.maj(statut="connexion", chanson=chanson["id"], position=0.0, index=-1,
-                     imprimer=imprimer, message="")
-            # Toute la chanson forme une seule bande continue. Le papier n'avance qu'en imprimant :
-            # quand une ligne est chantée, on imprime jusqu'à SORTIE rangées sous elle, ce qui la
-            # pousse hors de l'imprimante tandis que la suivante est déjà « pré-imprimée » dedans.
-            bande, fins, imprime = [], [], 0
-            vide = [False] * LARGEUR
-
-            def ajouter(page, ecart):
-                bande.extend(page)
-                bande.extend([vide] * ecart)
-
-            async def imprimer_jusqua(n):
-                nonlocal imprime
-                n = min(n, len(bande))
-                if n > imprime:
-                    await self.ecrire(bande[imprime:n], 0)
-                    imprime = n
-
+                     imprimer=imprimer, message="", jeu=None)
+            bande, fins = Bande(self), []
             if imprimer:
-                ajouter(texte_en_page(chanson["titre"], self.police_titre, LARGEUR), 0)
-                if chanson["artiste"]:
-                    ajouter(texte_en_page(chanson["artiste"], self.police_artiste, LARGEUR), 0)
-                ajouter([], 36)
-                debut_paroles = len(bande)
+                debut = self.entete(bande, chanson)
                 for _, texte in chanson["lignes"]:
-                    ajouter(texte_en_page(texte, self.police, LARGEUR), 0)
-                    fins.append(len(bande))
-                    ajouter([], ECART)
+                    fins.append(bande.ajouter(texte_en_page(texte, self.police, LARGEUR), ECART))
                 await self.connecter()
-                await imprimer_jusqua(debut_paroles + SORTIE)  # titre visible, 1re ligne en attente
+                await bande.sortir(debut)  # titre visible, 1re ligne en attente dans l'imprimante
 
-            horloge = HorlogeSpotify(chanson["titre"])
-            if chanson["uri"]:
-                await asyncio.to_thread(osascript, f'tell application "Spotify" to play track "{chanson["uri"]}"')
-                self.maj(statut="attente", message="Démarrage de Spotify…")
-            else:
-                self.maj(statut="attente", message="Pas de lien Spotify : lance la chanson dans Spotify.")
-
-            for i, (t, texte) in enumerate(chanson["lignes"]):
-                while True:
-                    pos = horloge()
-                    if pos is not None:
-                        self.maj(position=pos, statut="lecture", message="")
-                        if pos >= t - AVANCE_TEMPS:
-                            break
-                    elif self.etat["statut"] == "lecture":
-                        self.maj(statut="pause")
-                    await asyncio.sleep(0.05)
+            horloge = await self.demarrer_spotify(chanson)
+            for i, (t, _) in enumerate(chanson["lignes"]):
+                pos = await self.attendre(horloge, t - AVANCE_TEMPS)
                 if pos > t + 3:  # on a avancé dans le morceau : ligne dépassée
                     continue
                 if imprimer:
-                    await imprimer_jusqua(fins[i] + SORTIE)
+                    await bande.sortir(fins[i])
                 self.maj(index=i)
 
             if imprimer:  # reste de la bande, petit coeur de fin, puis on sort le papier
-                await imprimer_jusqua(len(bande))
+                await bande.jusqua(len(bande.rangees))
                 page = [[False] * LARGEUR for _ in range(72)]
                 coller(page, coeur(64), (LARGEUR - 64) // 2, 4)
                 await self.ecrire(page, SORTIE + 40)
@@ -229,6 +273,162 @@ class Lecteur:
         finally:
             if horloge:
                 horloge.arreter()
+
+    # ------------------------------------------------ jeu : le chat a mangé les paroles
+
+    def etat_jeu(self, **champs):
+        self.maj(jeu={**(self.etat["jeu"] or {}), **champs},
+                 partie={"score": self.partie["score"], "manche": self.partie["manche"]})
+
+    async def jouer_manche(self, chanson: dict, imprimer: bool):
+        horloge = None
+        try:
+            lignes = chanson["lignes"]
+            choisie = jeu.cible_balisee(lignes, chanson["jeu"])
+            if choisie:
+                cible, visible, caches = choisie
+            else:
+                cible = jeu.choisir_cible(lignes)
+                visible, caches = jeu.decouper(lignes[cible][1])
+            debut_i = max(0, cible - jeu.LIGNES_AVANT)
+            depart = max(0.0, lignes[debut_i][0] - 4)
+            self.partie["manche"] += 1
+            self.manche = {"chanson": chanson, "caches": caches, "joker": False, "choix": None,
+                           "repondu": False, "imprimer": imprimer}
+            self.maj(statut="connexion", chanson=chanson["id"], position=depart, index=debut_i - 1,
+                     imprimer=imprimer, message="", jeu=None)
+            self.etat_jeu(manche=self.partie["manche"], phase="ecoute", cible=cible, debut=debut_i,
+                          visible=visible, trous=jeu.trous(caches), choix=None, resultat=None)
+
+            bande, fins = Bande(self), {}
+            if imprimer:
+                await self.finir_impression()
+                debut = self.entete(bande, chanson, f"Manche {self.partie['manche']} · le chat a mangé les paroles")
+                for i in range(debut_i, cible):
+                    fins[i] = bande.ajouter(texte_en_page(lignes[i][1], self.police, LARGEUR), ECART)
+                fins[cible] = bande.ajouter(
+                    texte_en_page(f"{visible} {jeu.trous(caches)}", self.police, LARGEUR), ECART)
+                await self.connecter()
+                await bande.sortir(debut)
+
+            horloge = await self.demarrer_spotify(chanson, depart)
+            for i in range(debut_i, cible):
+                t = lignes[i][0]
+                pos = await self.attendre(horloge, t - AVANCE_TEMPS)
+                if imprimer and pos <= t + 3:
+                    await bande.sortir(fins[i])
+                self.maj(index=i)
+
+            # la musique se coupe juste avant la ligne mystère
+            await self.attendre(horloge, lignes[cible][0] - 0.25)
+            await asyncio.to_thread(osascript, 'tell application "Spotify" to pause')
+            self.maj(statut="question")
+            self.etat_jeu(phase="question")
+            if imprimer:
+                await bande.sortir(fins[cible])
+        except asyncio.CancelledError:
+            self.maj(statut="inactif", message="")
+            raise
+        except Exception as e:
+            self.maj(statut="erreur", message=str(e) or type(e).__name__)
+        finally:
+            if horloge:
+                horloge.arreter()
+
+    def verifier_question(self):
+        if not self.manche or self.manche["repondu"] or self.etat["statut"] != "question":
+            raise RuntimeError("Pas de question en cours.")
+
+    async def joker(self) -> dict:
+        self.verifier_question()
+        m = self.manche
+        if not m["joker"]:
+            chansons = await asyncio.to_thread(lister_chansons)
+            toutes = [t for c in chansons for _, t in c["lignes"]]
+            m["joker"], m["choix"] = True, jeu.propositions(m["caches"], toutes)
+            self.etat_jeu(choix=m["choix"])
+        return {"choix": m["choix"]}
+
+    async def repondre(self, texte: str) -> dict:
+        self.verifier_question()
+        m = self.manche
+        m["repondu"] = True
+        r = jeu.corriger(m["caches"], texte)
+        if m["joker"]:
+            r["points"] = jeu.POINTS_JOKER if r["parfait"] else 0
+        self.partie["score"] += r["points"]
+        resultat = {**r, "attendu": " ".join(m["caches"]), "donne": texte, "joker": m["joker"]}
+        self.maj(statut="resultat")
+        self.etat_jeu(phase="resultat", resultat=resultat)
+        try:  # on relance la musique pour entendre la vraie réponse
+            await asyncio.to_thread(osascript, 'tell application "Spotify" to play')
+        except Exception:
+            pass
+        if m["imprimer"]:
+            # tâche à part : lancer la manche suivante ne doit pas couper ce ticket
+            self.impression = asyncio.create_task(self.imprimer_resultat(resultat))
+        return resultat
+
+    async def finir_impression(self):
+        if self.impression and not self.impression.done():
+            try:
+                await self.impression
+            except BaseException:
+                pass
+
+    async def imprimer_resultat(self, r: dict):
+        if r["parfait"]:
+            verdict = f"BRAVO ! +{r['points']}"
+        elif r["points"]:
+            verdict = f"Presque ! +{r['points']}"
+        else:
+            verdict = "Raté… le chat garde les paroles"
+        try:
+            await self.ecrire_lignes([(f"> {r['attendu']}", self.police), (verdict, self.police_titre),
+                                      (f"Score : {self.partie['score']}", self.police_artiste)])
+        except Exception as e:
+            self.maj(imprimante_info=str(e))
+
+    async def lancer_manche(self, id_: str | None, imprimer: bool):
+        chansons = await asyncio.to_thread(lister_chansons)
+        jouables = [c for c in chansons if c["uri"]] or chansons
+        if id_:
+            chanson = next((c for c in chansons if c["id"] == id_), None)
+            if not chanson:
+                raise KeyError(f"Chanson inconnue : {id_}")
+        elif jouables:
+            chanson = random.choice(jouables)
+        else:
+            raise RuntimeError("Aucune chanson disponible.")
+        await self._annuler()
+        self.tache = asyncio.create_task(self.jouer_manche(chanson, imprimer))
+
+    async def nouvelle_partie(self):
+        await self._annuler()
+        self.partie = {"score": 0, "manche": 0}
+        self.manche = None
+        self.maj(statut="inactif", chanson=None, jeu=None, partie=dict(self.partie))
+
+    async def terminer_partie(self, imprimer: bool):
+        await self.arreter()
+        score, manches = self.partie["score"], self.partie["manche"]
+        self.maj(statut="inactif")
+        self.etat_jeu(phase="fin")
+        if imprimer and manches:
+            async def ticket():
+                try:
+                    await self.finir_impression()
+                    await self.connecter()
+                    await self.ecrire_lignes([("Fin de partie", self.police_titre),
+                                              (f"Score final : {score}", self.police),
+                                              (f"en {manches} manche{'s' if manches > 1 else ''}", self.police_artiste)],
+                                             avance=0)
+                    page = [[False] * LARGEUR for _ in range(72)]
+                    coller(page, coeur(64), (LARGEUR - 64) // 2, 4)
+                    await self.ecrire(page, SORTIE + 40)
+                except Exception as e:
+                    self.maj(imprimante_info=str(e))
+            self.tache = asyncio.create_task(ticket())
 
     async def _annuler(self):
         if self.tache and not self.tache.done():
@@ -317,10 +517,20 @@ class Requetes(BaseHTTPRequestHandler):
             elif self.path == "/api/connecter":
                 BOUCLE.call_soon_threadsafe(lambda: asyncio.create_task(LECTEUR.connexion_initiale()))
                 return self.repondre(200, {"ok": True})
+            elif self.path == "/api/jeu/manche":
+                action = LECTEUR.lancer_manche(corps.get("id"), bool(corps.get("imprimer", True)))
+            elif self.path == "/api/jeu/joker":
+                action = LECTEUR.joker()
+            elif self.path == "/api/jeu/repondre":
+                action = LECTEUR.repondre(str(corps.get("texte", "")))
+            elif self.path == "/api/jeu/nouvelle":
+                action = LECTEUR.nouvelle_partie()
+            elif self.path == "/api/jeu/terminer":
+                action = LECTEUR.terminer_partie(bool(corps.get("imprimer", True)))
             else:
                 return self.repondre(404, {"erreur": "introuvable"})
-            asyncio.run_coroutine_threadsafe(action, BOUCLE).result(timeout=20)
-            self.repondre(200, {"ok": True})
+            resultat = asyncio.run_coroutine_threadsafe(action, BOUCLE).result(timeout=20)
+            self.repondre(200, resultat if isinstance(resultat, dict) else {"ok": True})
         except Exception as e:
             self.repondre(400, {"erreur": str(e) or type(e).__name__})
 
