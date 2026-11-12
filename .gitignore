@@ -2,3 +2,6 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+# Paroles : protégées par le droit d'auteur, chacun garde ses .lrc en local
+*.lrc
