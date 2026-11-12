@@ -41,10 +41,17 @@ En plus des balises LRC habituelles, deux balises maison :
 [ar: Artiste]
 [length: 03:12]
 [spotify: https://open.spotify.com/track/…]   ← lien du morceau : un clic le lance dans Spotify
+[jeu: Début de la ligne | suite à deviner]    ← (facultatif) la ligne mystère du jeu
 [00:12.34] première ligne
 [00:15.80] deuxième ligne
 ```
 
+## Le jeu « Le chat a mangé les paroles »
+
+Onglet 🐱 : la musique se coupe juste avant une ligne, qui s'affiche avec des trous
+(`Il pleut __ ____ __ _____`). On tape la suite (100 points sans faute, 10 par mot juste) ou on
+prend le joker 🃏 (4 propositions, 50 points). Accents, majuscules, ponctuation et petites fautes
+sont tolérés. La ligne vient de la balise `[jeu: …]`, sinon elle est tirée au hasard.
 
 ## Fichiers
 
@@ -52,6 +59,7 @@ En plus des balises LRC habituelles, deux balises maison :
 |---|---|
 | `serveur.py` | serveur local : interface, Spotify, impression |
 | `interface.html` | l'interface web |
+| `jeu.py` | logique du jeu (trous, correction, joker) |
 | `paroles.py` | lecture des `.lrc`, rendu du texte, suivi de Spotify (+ version ligne de commande) |
 | `rideau.py` | dessin du rideau imprimé (`python rideau.py apercu.png` pour le voir) |
 | `coeur.py` | protocole de l'imprimante (cat printer BLE / ESC/POS) et premier test : des coeurs |
